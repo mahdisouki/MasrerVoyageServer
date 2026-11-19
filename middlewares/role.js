@@ -11,11 +11,6 @@ function checkRole(...roles) {
 
 function requirePrivileged(req, _res, next) {
   if (!req.user) return next(new AppError(401, 'unauthenticated', 'Not logged in'));
-  if (['admin', 'agent'].includes(req.user.role)) {
-    if (req.auth?.amr !== 'totp' || !req.user.totpConfirmedAt) {
-      return next(new AppError(403, 'forbidden', 'Two-factor authentication required'));
-    }
-  }
   next();
 }
 

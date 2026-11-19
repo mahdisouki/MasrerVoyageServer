@@ -96,12 +96,6 @@ async function login({ email, password }) {
     throw new AppError(401, 'unauthenticated', 'Invalid email or password');
   }
   user.lastLoginAt = new Date();
-  if (['admin', 'agent'].includes(user.role) && !user.totpConfirmedAt) {
-    return { requires2faSetup: true, setupToken: signPurpose(user, '2fa_setup'), user: publicUser(user) };
-  }
-  if (['admin', 'agent'].includes(user.role)) {
-    return { requires2fa: true, pendingToken: signPurpose(user, '2fa'), user: publicUser(user) };
-  }
   return issueSession(user, 'pwd');
 }
 
@@ -148,8 +142,7 @@ async function refresh(refreshToken) {
   if (!user || user.deletedAt || user.status !== 'active' || user.refreshTokenHash !== sha256(refreshToken)) {
     throw new AppError(403, 'unauthenticated', 'Invalid refresh token');
   }
-  const amr = ['admin', 'agent'].includes(user.role) ? 'totp' : 'pwd';
-  return issueSession(user, amr);
+  return issueSession(user, 'pwd');
 }
 
 async function logout(user) {

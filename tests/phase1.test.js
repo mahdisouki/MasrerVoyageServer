@@ -90,7 +90,7 @@ test('role matrix refuses station operators outside the scan API', async () => {
   assert.equal(adminDenied.status, 403);
   const customerDenied = await request(app).get('/api/v1/admin/stats').set('Authorization', `Bearer ${tokenFor(customer)}`);
   assert.equal(customerDenied.status, 403);
-  const stats = await request(app).get('/api/v1/admin/stats').set('Authorization', `Bearer ${tokenFor(admin, 'totp')}`);
+  const stats = await request(app).get('/api/v1/admin/stats').set('Authorization', `Bearer ${tokenFor(admin, 'pwd')}`);
   assert.equal(stats.status, 200);
   assert.equal(stats.body.success, true);
 });
