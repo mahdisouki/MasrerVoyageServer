@@ -6,6 +6,12 @@ const MESSAGES = {
   forbidden: { fr: 'Accès refusé', ar: 'الوصول مرفوض', en: 'Forbidden' },
   rate_limited: { fr: 'Trop de tentatives', ar: 'محاولات كثيرة', en: 'Too many attempts' },
   sold_out: { fr: 'Date complète', ar: 'التاريخ مكتمل', en: 'Not enough quota for the chosen date' },
+  day_blocked: { fr: 'Journée fermée', ar: 'اليوم مغلق', en: 'This date is closed' },
+  quota_too_low: {
+    fr: 'La quantité est inférieure aux ventes déjà engagées sur un jour du mois',
+    ar: 'الكمية أقل من المبيعات المحجوزة في أحد أيام الشهر',
+    en: 'Quantity is below sales already committed on a day of the month',
+  },
   order_expired: { fr: 'La réservation a expiré', ar: 'انتهت صلاحية الحجز', en: 'The reservation has expired' },
   idempotency_conflict: { fr: 'Clé d’idempotence réutilisée', ar: 'أعيد استخدام مفتاح التكرار', en: 'Idempotency-Key reused with a different request' },
   request_in_progress: { fr: 'Requête en cours', ar: 'الطلب قيد المعالجة', en: 'Request is still being processed' },
@@ -27,6 +33,21 @@ const MESSAGES = {
   settings_missing: { fr: 'Paramètre manquant', ar: 'إعداد مفقود', en: 'Required setting is missing' },
   internal_error: { fr: 'Erreur interne', ar: 'خطأ داخلي', en: 'An error occurred' },
   duplicate: { fr: 'Valeur déjà utilisée', ar: 'القيمة مستخدمة', en: 'Duplicate value' },
+  role_not_allowed: {
+    fr: 'Ce rôle ne peut pas être attribué ici',
+    ar: 'لا يمكن تعيين هذا الدور من هنا',
+    en: 'This role cannot be assigned here',
+  },
+  cannot_disable_self: {
+    fr: 'Vous ne pouvez pas désactiver votre propre compte',
+    ar: 'لا يمكنك تعطيل حسابك',
+    en: 'You cannot disable your own account',
+  },
+  last_admin: {
+    fr: 'Le dernier administrateur ne peut pas être retiré',
+    ar: 'لا يمكن إزالة آخر مسؤول',
+    en: 'The last administrator cannot be removed',
+  },
 };
 
 function translate(code, locale, fallback) {

@@ -6,6 +6,7 @@ const { AppError } = require('../utils/AppError');
 const { assertMillimes } = require('../utils/money');
 const { assertIsoDate, todayTunis } = require('../utils/dates');
 const { audit } = require('./auditService');
+const { runTransaction } = require('../utils/transaction');
 const { LOCALES } = require('../config/constants');
 
 const FIELDS = ['name', 'description', 'conditions'];
@@ -68,14 +69,22 @@ async function getPublic(id, locale) {
   return item;
 }
 
-async function monthAvailability(voucherTypeId, month) {
+function assertMonth(month) {
   if (!/^\d{4}-\d{2}$/.test(month || '')) {
     throw new AppError(422, 'validation_error', 'month must be YYYY-MM', [{ field: 'month' }]);
   }
-  await getPublic(voucherTypeId, 'fr');
-  const [year, monthNumber] = month.split('-').map(Number);
+  const monthNumber = Number(month.slice(5, 7));
+  if (monthNumber < 1 || monthNumber > 12) {
+    throw new AppError(422, 'validation_error', 'month must be YYYY-MM', [{ field: 'month' }]);
+  }
+  return month;
+}
+
+async function buildMonthDays(voucherTypeId, month) {
+  const prefix = assertMonth(month);
+  const monthNumber = Number(prefix.slice(5, 7));
+  const year = Number(prefix.slice(0, 4));
   const daysInMonth = new Date(Date.UTC(year, monthNumber, 0)).getUTCDate();
-  const prefix = month;
   const rows = await Availability.find({
     voucherTypeId,
     day: { $gte: `${prefix}-01`, $lte: `${prefix}-31` },
@@ -89,14 +98,32 @@ async function monthAvailability(voucherTypeId, month) {
     const sold = row ? row.sold : 0;
     const reserved = row ? row.reserved : 0;
     const quota = row ? row.quota : null;
+    const blocked = Boolean(row?.blocked);
     const remaining = quota == null ? null : quota - sold - reserved;
     days.push({
       day: iso,
-      available: iso >= today && (remaining == null || remaining > 0),
+      quota,
+      sold,
+      reserved,
       remaining,
+      blocked,
+      available: iso >= today && !blocked && (remaining == null || remaining > 0),
     });
   }
   return days;
+}
+
+async function monthAvailability(voucherTypeId, month) {
+  await getPublic(voucherTypeId, 'fr');
+  const days = await buildMonthDays(voucherTypeId, month);
+  return days.map(({ day, available, remaining, blocked }) => ({ day, available, remaining, blocked }));
+}
+
+async function adminMonthAvailability(voucherTypeId, month) {
+  if (!mongoose.isValidObjectId(voucherTypeId)) throw new AppError(404, 'not_found', 'Not found');
+  const type = await VoucherType.findOne({ _id: voucherTypeId, deletedAt: null });
+  if (!type) throw new AppError(404, 'not_found', 'Not found');
+  return buildMonthDays(voucherTypeId, month);
 }
 
 async function createVoucherType({ body, userId }) {
@@ -158,15 +185,34 @@ async function removeVoucherType(id, userId) {
 
 async function adminList() {
   const docs = await VoucherType.find({ deletedAt: null }).sort({ createdAt: -1 });
-  const translated = await attachTranslations(docs, 'fr');
-  return Promise.all(translated.map(async (item) => ({ ...item, missingLocales: await missingLocales(item._id) })));
+  const ids = docs.map((doc) => doc._id);
+  const rows = await Translation.find({
+    entity: 'voucher_type',
+    entityId: { $in: ids },
+    status: 'published',
+  });
+  return Promise.all(docs.map(async (doc) => {
+    const json = doc.toJSON();
+    const translations = {};
+    for (const locale of LOCALES) {
+      translations[locale] = {};
+      for (const field of FIELDS) {
+        const row = rows.find((item) => item.entityId.equals(doc._id) && item.locale === locale && item.field === field);
+        if (row) translations[locale][field] = row.value;
+      }
+    }
+    json.name = translations.fr?.name || null;
+    json.description = translations.fr?.description || null;
+    json.conditions = translations.fr?.conditions || null;
+    json.translations = translations;
+    json.missingLocales = await missingLocales(doc._id);
+    return json;
+  }));
 }
 
 async function setAvailability({ voucherTypeId, day, quota }, userId) {
   assertIsoDate(day, 'day');
-  if (quota != null && (!Number.isInteger(quota) || quota < 0)) {
-    throw new AppError(422, 'validation_error', 'quota must be a non-negative integer or null', [{ field: 'quota' }]);
-  }
+  assertQuota(quota);
   const type = await VoucherType.findOne({ _id: voucherTypeId, deletedAt: null });
   if (!type) throw new AppError(404, 'not_found', 'Not found');
   const existing = await Availability.findOne({ voucherTypeId, day });
@@ -179,6 +225,67 @@ async function setAvailability({ voucherTypeId, day, quota }, userId) {
     { upsert: true, new: true },
   );
   await audit({ userId, action: 'availability.update', entity: 'availability', entityId: row._id, meta: { day, quota } });
+  return row;
+}
+
+function assertQuota(quota) {
+  if (quota != null && (!Number.isInteger(quota) || quota < 0)) {
+    throw new AppError(422, 'validation_error', 'quota must be a non-negative integer or null', [{ field: 'quota' }]);
+  }
+}
+
+async function setMonthQuota({ voucherTypeId, month, quota }, userId) {
+  const prefix = assertMonth(month);
+  if (quota === undefined) throw new AppError(422, 'validation_error', 'quota is required', [{ field: 'quota' }]);
+  assertQuota(quota);
+  if (!mongoose.isValidObjectId(voucherTypeId)) throw new AppError(404, 'not_found', 'Not found');
+  const type = await VoucherType.findOne({ _id: voucherTypeId, deletedAt: null });
+  if (!type) throw new AppError(404, 'not_found', 'Not found');
+  const days = await buildMonthDays(voucherTypeId, prefix);
+  return runTransaction(async (session) => {
+    for (const day of days) {
+      const existing = await Availability.findOne({ voucherTypeId, day: day.day }).session(session);
+      const committed = existing ? existing.sold + existing.reserved : 0;
+      if (quota != null && quota < committed) {
+        throw new AppError(422, 'quota_too_low', 'Quantity is below sales already committed on a day of the month', [{ field: 'quota', day: day.day }]);
+      }
+      await Availability.findOneAndUpdate(
+        { voucherTypeId, day: day.day },
+        { $set: { quota }, $setOnInsert: { sold: 0, reserved: 0, blocked: false } },
+        { upsert: true, session },
+      );
+    }
+    await audit({
+      userId,
+      action: 'availability.month',
+      entity: 'voucher_type',
+      entityId: type._id,
+      meta: { month: prefix, quota, days: days.length },
+      session,
+    });
+    return { month: prefix, quota, days: days.length };
+  });
+}
+
+async function setDayBlock({ voucherTypeId, day, blocked }, userId) {
+  assertIsoDate(day, 'day');
+  if (typeof blocked !== 'boolean') {
+    throw new AppError(422, 'validation_error', 'blocked must be true or false', [{ field: 'blocked' }]);
+  }
+  const type = await VoucherType.findOne({ _id: voucherTypeId, deletedAt: null });
+  if (!type) throw new AppError(404, 'not_found', 'Not found');
+  const row = await Availability.findOneAndUpdate(
+    { voucherTypeId, day },
+    { $set: { blocked }, $setOnInsert: { quota: null, sold: 0, reserved: 0 } },
+    { upsert: true, new: true },
+  );
+  await audit({
+    userId,
+    action: blocked ? 'availability.block' : 'availability.unblock',
+    entity: 'availability',
+    entityId: row._id,
+    meta: { day },
+  });
   return row;
 }
 
@@ -236,12 +343,15 @@ module.exports = {
   listPublic,
   getPublic,
   monthAvailability,
+  adminMonthAvailability,
   createVoucherType,
   updateVoucherType,
   publish,
   removeVoucherType,
   adminList,
   setAvailability,
+  setMonthQuota,
+  setDayBlock,
   createPriceGrid,
   setGridPrice,
   listPriceGrids,

@@ -4,7 +4,7 @@ const { AppError } = require('../utils/AppError');
 async function ensureRow(voucherTypeId, day) {
   await Availability.updateOne(
     { voucherTypeId, day },
-    { $setOnInsert: { voucherTypeId, day, quota: null, sold: 0, reserved: 0 } },
+    { $setOnInsert: { voucherTypeId, day, quota: null, sold: 0, reserved: 0, blocked: false } },
     { upsert: true },
   );
 }
@@ -13,6 +13,7 @@ function quotaFilter(voucherTypeId, day, qty) {
   return {
     voucherTypeId,
     day,
+    blocked: { $ne: true },
     $or: [
       { quota: null },
       { $expr: { $lte: [{ $add: ['$sold', '$reserved', qty] }, '$quota'] } },
@@ -27,7 +28,14 @@ async function reserve(session, groups) {
       { $inc: { reserved: group.qty } },
       { session, new: true },
     );
-    if (!updated) throw new AppError(409, 'sold_out', 'Not enough quota for the chosen date');
+    if (!updated) {
+      const current = await Availability.findOne({
+        voucherTypeId: group.voucherTypeId,
+        day: group.visitDate,
+      }).session(session);
+      if (current?.blocked) throw new AppError(409, 'day_blocked', 'This date is closed');
+      throw new AppError(409, 'sold_out', 'Not enough quota for the chosen date');
+    }
   }
 }
 

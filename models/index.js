@@ -6,6 +6,7 @@ module.exports = {
   PriceGrid: require('./priceGrid.model'),
   PriceGridPrice: require('./priceGridPrice.model'),
   VoucherType: require('./voucherType.model'),
+  Treatment: require('./treatment.model'),
   Translation: require('./translation.model'),
   Availability: require('./availability.model'),
   PromoCode: require('./promoCode.model'),

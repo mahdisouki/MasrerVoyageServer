@@ -7,6 +7,7 @@ const availabilitySchema = new Schema({
   quota: { type: Number, default: null },
   sold: { type: Number, default: 0 },
   reserved: { type: Number, default: 0 },
+  blocked: { type: Boolean, default: false },
 }, { timestamps: true });
 
 availabilitySchema.index({ voucherTypeId: 1, day: 1 }, { unique: true });

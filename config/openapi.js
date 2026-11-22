@@ -376,8 +376,52 @@ const spec = {
         body: 'multipart',
         schema: { type: 'object', required: ['photo'], properties: { photo: { type: 'string', format: 'binary' } } },
       }),
+      delete: op('Admin', 'Remove a voucher photo', {
+        auth: true,
+        params: [idParam],
+        body: {
+          type: 'object',
+          required: ['photo'],
+          properties: { photo: { type: 'string', example: 'photos/cover.jpg' } },
+        },
+      }),
+    },
+    '/admin/availability/month': {
+      put: op('Admin', 'Set the same daily quota for every day of a month', {
+        auth: true,
+        body: {
+          type: 'object',
+          required: ['voucherTypeId', 'month'],
+          properties: {
+            voucherTypeId: { type: 'string' },
+            month: { type: 'string', example: '2026-11' },
+            quota: { type: 'integer', nullable: true },
+          },
+        },
+      }),
+    },
+    '/admin/availability/block': {
+      put: op('Admin', 'Close or reopen one day for a bon', {
+        auth: true,
+        body: {
+          type: 'object',
+          required: ['voucherTypeId', 'day', 'blocked'],
+          properties: {
+            voucherTypeId: { type: 'string' },
+            day: { type: 'string' },
+            blocked: { type: 'boolean' },
+          },
+        },
+      }),
     },
     '/admin/availability': {
+      get: op('Admin', 'Daily quota, sold and reserved for one bon and one month', {
+        auth: true,
+        params: [
+          { in: 'query', name: 'voucherTypeId', required: true, schema: { type: 'string' } },
+          { in: 'query', name: 'month', required: true, schema: { type: 'string', example: '2026-11' } },
+        ],
+      }),
       put: op('Admin', 'Set the daily quota', {
         auth: true,
         body: {
@@ -476,7 +520,7 @@ const spec = {
     },
     '/admin/users': {
       get: op('Admin', 'List users', { auth: true }),
-      post: op('Admin', 'Create an agent, admin, or station operator', {
+      post: op('Admin', 'Create an administrator, agent, customer, or station operator', {
         auth: true,
         body: {
           type: 'object',
@@ -484,7 +528,7 @@ const spec = {
           properties: {
             email: { type: 'string' },
             password: { type: 'string' },
-            role: { type: 'string', enum: ['agent', 'admin', 'station_operator'] },
+            role: { type: 'string', enum: ['customer', 'agent', 'admin', 'station_operator'] },
             firstName: { type: 'string' },
             lastName: { type: 'string' },
             language: { type: 'string', enum: ['fr', 'ar', 'en'] },
@@ -499,7 +543,7 @@ const spec = {
         body: {
           type: 'object',
           properties: {
-            role: { type: 'string', enum: ['customer', 'partner', 'agent', 'admin', 'station_operator'] },
+            role: { type: 'string', enum: ['customer', 'agent', 'admin', 'station_operator'] },
             status: { type: 'string', enum: ['active', 'disabled'] },
           },
         },

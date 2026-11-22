@@ -8,7 +8,9 @@ const { sha256, randomCode } = require('../utils/money');
 const { encrypt, decrypt } = require('../utils/secrets');
 const { audit } = require('./auditService');
 const { enqueue } = require('./jobQueue');
-const { LOCALES, ROLES } = require('../config/constants');
+const { LOCALES } = require('../config/constants');
+
+const MANAGED_ROLES = ['customer', 'agent', 'admin', 'station_operator'];
 
 function rounds() {
   return process.env.NODE_ENV === 'test' ? 4 : 12;
@@ -35,6 +37,7 @@ function publicUser(user) {
     language: user.language,
     firstName: user.firstName,
     lastName: user.lastName,
+    status: user.status || 'active',
   };
 }
 
@@ -184,33 +187,57 @@ async function resetPassword({ token, password }) {
 async function createStaff(body, actorId) {
   const email = assertEmail(body.email);
   assertPassword(body.password);
-  if (!['agent', 'admin', 'station_operator'].includes(body.role)) {
-    throw new AppError(422, 'validation_error', 'role is not allowed', [{ field: 'role' }]);
+  if (!MANAGED_ROLES.includes(body.role)) {
+    throw new AppError(422, 'role_not_allowed', 'This role cannot be assigned here', [{ field: 'role' }]);
   }
-  if (!ROLES.includes(body.role)) throw new AppError(422, 'validation_error', 'role is not allowed', [{ field: 'role' }]);
-  const user = await User.create({
-    email,
-    passwordHash: await bcrypt.hash(body.password, rounds()),
-    role: body.role,
-    firstName: body.firstName || '',
-    lastName: body.lastName || '',
-    language: LOCALES.includes(body.language) ? body.language : 'fr',
-  });
-  await audit({ userId: actorId, action: 'user.create', entity: 'user', entityId: user._id, meta: { role: user.role } });
-  return publicUser(user);
+  try {
+    const user = await User.create({
+      email,
+      passwordHash: await bcrypt.hash(body.password, rounds()),
+      role: body.role,
+      firstName: body.firstName || '',
+      lastName: body.lastName || '',
+      language: LOCALES.includes(body.language) ? body.language : 'fr',
+    });
+    await audit({ userId: actorId, action: 'user.create', entity: 'user', entityId: user._id, meta: { role: user.role } });
+    return publicUser(user);
+  } catch (err) {
+    if (err.code === 11000) throw new AppError(409, 'duplicate', 'Email is already registered', [{ field: 'email' }]);
+    throw err;
+  }
 }
 
 async function updateUser(id, body, actorId) {
   const user = await User.findOne({ _id: id, deletedAt: null });
   if (!user) throw new AppError(404, 'not_found', 'Not found');
-  if (body.status) {
-    if (!['active', 'disabled'].includes(body.status)) throw new AppError(422, 'validation_error', 'Invalid status');
-    user.status = body.status;
+  if (body.status !== undefined && !['active', 'disabled'].includes(body.status)) {
+    throw new AppError(422, 'validation_error', 'Invalid status', [{ field: 'status' }]);
   }
-  if (body.role) {
-    if (!ROLES.includes(body.role)) throw new AppError(422, 'validation_error', 'Invalid role');
-    user.role = body.role;
+  if (body.role !== undefined) {
+    if (!MANAGED_ROLES.includes(body.role) || user.role === 'partner') {
+      throw new AppError(422, 'role_not_allowed', 'This role cannot be assigned here', [{ field: 'role' }]);
+    }
   }
+  const nextStatus = body.status ?? user.status;
+  const nextRole = body.role ?? user.role;
+  if (String(user._id) === String(actorId) && nextStatus === 'disabled') {
+    throw new AppError(409, 'cannot_disable_self', 'You cannot disable your own account');
+  }
+  const removingActiveAdmin = user.role === 'admin' && user.status === 'active'
+    && (nextRole !== 'admin' || nextStatus !== 'active');
+  if (removingActiveAdmin) {
+    const others = await User.countDocuments({
+      _id: { $ne: user._id },
+      role: 'admin',
+      status: 'active',
+      deletedAt: null,
+    });
+    if (others === 0) {
+      throw new AppError(409, 'last_admin', 'The last administrator cannot be removed');
+    }
+  }
+  if (body.status) user.status = body.status;
+  if (body.role) user.role = body.role;
   await user.save();
   await audit({ userId: actorId, action: 'user.update', entity: 'user', entityId: user._id, meta: { role: user.role, status: user.status } });
   return publicUser(user);

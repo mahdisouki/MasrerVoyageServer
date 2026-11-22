@@ -12,6 +12,15 @@ function storagePath(key) {
   return path.join(process.env.STORAGE_DIR, key);
 }
 
+function resolveStorage(key) {
+  const root = path.resolve(process.env.STORAGE_DIR);
+  const full = path.resolve(root, key);
+  if (full !== root && !full.startsWith(`${root}${path.sep}`)) {
+    throw new AppError(404, 'not_found', 'Not found');
+  }
+  return full;
+}
+
 async function save(key, buffer) {
   const full = storagePath(key);
   await fs.mkdir(path.dirname(full), { recursive: true });
@@ -30,9 +39,23 @@ function htmlShell(locale, title, body) {
   </head><body>${body}</body></html>`;
 }
 
+function chromeLaunchOptions() {
+  const options = {
+    headless: true,
+    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+  };
+  if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+    options.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+    return options;
+  }
+  // Prefer the locally installed Google Chrome when Puppeteer's bundled browser is missing.
+  options.channel = 'chrome';
+  return options;
+}
+
 async function renderPdf(html) {
   const puppeteer = require('puppeteer');
-  const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox'] });
+  const browser = await puppeteer.launch(chromeLaunchOptions());
   try {
     const page = await browser.newPage();
     await page.setContent(html, { waitUntil: 'load' });
@@ -89,4 +112,4 @@ async function generateForOrder({ orderId }) {
   await enqueue(null, jobs);
 }
 
-module.exports = { save, read, generateForOrder, storagePath };
+module.exports = { save, read, generateForOrder, storagePath, resolveStorage };

@@ -1,11 +1,36 @@
 const { asyncHandler } = require('../utils/asyncHandler');
 const catalogue = require('../services/catalogueService');
+const treatments = require('../services/treatmentService');
 const orders = require('../services/orderService');
 const payments = require('../services/paymentService');
 const vouchers = require('../services/voucherService');
 const { Invoice } = require('../models');
 const { AppError } = require('../utils/AppError');
-const { read } = require('../services/pdfService');
+const { read, resolveStorage } = require('../services/pdfService');
+
+function sendStoredPhoto(res, key) {
+  const { resolveStorage } = require('../services/pdfService');
+  const normalized = typeof key === 'string' ? key.replace(/\\/g, '/') : '';
+  if (!normalized || normalized.includes('..') || !normalized.startsWith('photos/')) {
+    throw new AppError(404, 'not_found', 'Not found');
+  }
+  res.sendFile(resolveStorage(normalized));
+}
+
+const listTreatments = asyncHandler(async (req, res) => {
+  res.json({ success: true, data: await treatments.listPublic(req.locale) });
+});
+
+const getTreatment = asyncHandler(async (req, res) => {
+  res.json({ success: true, data: await treatments.getPublicBySlug(req.params.slug, req.locale) });
+});
+
+const treatmentPhoto = asyncHandler(async (req, res) => {
+  const { Treatment } = require('../models');
+  const doc = await Treatment.findOne({ _id: req.params.id, status: 'published', active: true, deletedAt: null });
+  if (!doc) throw new AppError(404, 'not_found', 'Not found');
+  sendStoredPhoto(res, doc.photos?.[0]);
+});
 
 const listVouchers = asyncHandler(async (req, res) => {
   const data = await catalogue.listPublic(req.locale);
@@ -15,6 +40,16 @@ const listVouchers = asyncHandler(async (req, res) => {
 const getVoucher = asyncHandler(async (req, res) => {
   const data = await catalogue.getPublic(req.params.id, req.locale);
   res.json({ success: true, data });
+});
+
+const voucherPhoto = asyncHandler(async (req, res) => {
+  const voucher = await catalogue.getPublic(req.params.id, 'fr');
+  const key = Array.isArray(voucher.photos) ? voucher.photos[0] : null;
+  const normalized = typeof key === 'string' ? key.replace(/\\/g, '/') : '';
+  if (!normalized || normalized.includes('..') || !normalized.startsWith('photos/')) {
+    throw new AppError(404, 'not_found', 'Not found');
+  }
+  res.sendFile(resolveStorage(normalized));
 });
 
 const availability = asyncHandler(async (req, res) => {
@@ -103,6 +138,7 @@ const invoicePdf = asyncHandler(async (req, res) => {
 });
 
 module.exports = {
-  listVouchers, getVoucher, availability, createOrder, listOrders, getOrder, guestAccess, byToken,
+  listTreatments, getTreatment, treatmentPhoto,
+  listVouchers, getVoucher, voucherPhoto, availability, createOrder, listOrders, getOrder, guestAccess, byToken,
   cancellationRequest, createPayment, myVouchers, resendVoucher, voucherPdf, myInvoices, invoicePdf,
 };

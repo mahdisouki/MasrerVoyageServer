@@ -293,3 +293,194 @@ test('cancelling a paid order invalidates the voucher', async () => {
   const scan = await station.scan({ token: created.body.data.vouchers[0].qrToken, operator, deviceId: 'desk' });
   assert.equal(scan.body.code, 'cancelled');
 });
+
+test('admin availability lists the daily quota for a bon', async () => {
+  const admin = await User.create({ email: 'quota-admin@test.tn', passwordHash: 'x', role: 'admin' });
+  const voucher = await publishedVoucher(admin, 'quota-month');
+  const { todayTunis } = require('../utils/dates');
+  const day = todayTunis();
+  await catalogue.setAvailability({ voucherTypeId: voucher._id, day, quota: 4 }, admin._id);
+  const days = await catalogue.adminMonthAvailability(voucher._id, day.slice(0, 7));
+  const row = days.find((item) => item.day === day);
+  assert.equal(row.quota, 4);
+  assert.equal(row.sold, 0);
+  assert.equal(row.reserved, 0);
+  assert.equal(row.remaining, 4);
+  const agent = await User.create({ email: 'quota-agent@test.tn', passwordHash: 'x', role: 'agent' });
+  const denied = await request(app)
+    .put('/api/v1/admin/availability')
+    .set('Authorization', `Bearer ${tokenFor(agent)}`)
+    .send({ voucherTypeId: voucher._id.toString(), day, quota: 2 });
+  assert.equal(denied.status, 403);
+});
+
+test('one quantity fills every day of the month', async () => {
+  const admin = await User.create({ email: 'month-admin@test.tn', passwordHash: 'x', role: 'admin' });
+  const voucher = await publishedVoucher(admin, 'month-fill');
+  const month = '2026-11';
+  const filled = await catalogue.setMonthQuota({ voucherTypeId: voucher._id, month, quota: 12 }, admin._id);
+  assert.equal(filled.days, 30);
+  const days = await catalogue.adminMonthAvailability(voucher._id, month);
+  assert.equal(days.length, 30);
+  assert.ok(days.every((day) => day.quota === 12));
+  await Availability.updateOne({ voucherTypeId: voucher._id, day: '2026-11-02' }, { sold: 20 });
+  await assert.rejects(
+    () => catalogue.setMonthQuota({ voucherTypeId: voucher._id, month, quota: 5 }, admin._id),
+    (err) => err.code === 'quota_too_low',
+  );
+  const kept = await Availability.findOne({ voucherTypeId: voucher._id, day: '2026-11-01' });
+  assert.equal(kept.quota, 12);
+});
+
+test('an agent can close a day and a new order is refused', async () => {
+  const admin = await User.create({ email: 'block-admin@test.tn', passwordHash: 'x', role: 'admin' });
+  const agent = await User.create({ email: 'block-agent@test.tn', passwordHash: 'x', role: 'agent' });
+  const customer = await User.create({ email: 'block-customer@test.tn', passwordHash: 'x', role: 'customer' });
+  const voucher = await publishedVoucher(admin, 'block-day');
+  const { addDays, todayTunis } = require('../utils/dates');
+  const day = addDays(todayTunis(), 4);
+  const customerDenied = await request(app)
+    .put('/api/v1/admin/availability/block')
+    .set('Authorization', `Bearer ${tokenFor(customer)}`)
+    .send({ voucherTypeId: voucher._id.toString(), day, blocked: true });
+  assert.equal(customerDenied.status, 403);
+  const closed = await request(app)
+    .put('/api/v1/admin/availability/block')
+    .set('Authorization', `Bearer ${tokenFor(agent)}`)
+    .send({ voucherTypeId: voucher._id.toString(), day, blocked: true });
+  assert.equal(closed.status, 200);
+  assert.equal(closed.body.data.blocked, true);
+  await assert.rejects(
+    () => orderService.createOrder({
+      body: {
+        paymentMode: 'sandbox_card',
+        guestEmail: 'buyer-block@test.tn',
+        lines: [{ voucherTypeId: voucher._id.toString(), beneficiaries: [{ name: 'Ines', visitDate: day }] }],
+      },
+      idempotencyKey: 'block-order',
+      requestId: 'block',
+      locale: 'fr',
+    }),
+    (err) => err.code === 'day_blocked',
+  );
+  const days = await catalogue.monthAvailability(voucher._id, day.slice(0, 7));
+  assert.equal(days.find((item) => item.day === day).available, false);
+  const opened = await request(app)
+    .put('/api/v1/admin/availability/block')
+    .set('Authorization', `Bearer ${tokenFor(admin)}`)
+    .send({ voucherTypeId: voucher._id.toString(), day, blocked: false });
+  assert.equal(opened.status, 200);
+  assert.equal(opened.body.data.blocked, false);
+});
+
+test('only an admin can create and update users', async () => {
+  const admin = await User.create({ email: 'users-admin@test.tn', passwordHash: 'x', role: 'admin' });
+  const agent = await User.create({ email: 'users-agent@test.tn', passwordHash: 'x', role: 'agent' });
+  const adminToken = tokenFor(admin);
+  const agentToken = tokenFor(agent);
+
+  const denied = await request(app)
+    .post('/api/v1/admin/users')
+    .set('Authorization', `Bearer ${agentToken}`)
+    .send({ email: 'blocked-user@test.tn', password: 'password1', role: 'agent' });
+  assert.equal(denied.status, 403);
+
+  const created = await request(app)
+    .post('/api/v1/admin/users')
+    .set('Authorization', `Bearer ${adminToken}`)
+    .set('Accept-Language', 'fr')
+    .send({
+      email: 'new-customer@test.tn',
+      password: 'password1',
+      role: 'customer',
+      firstName: 'Sami',
+      language: 'fr',
+    });
+  assert.equal(created.status, 201);
+  assert.equal(created.body.data.role, 'customer');
+  assert.equal(created.body.data.status, 'active');
+
+  const partnerRole = await request(app)
+    .post('/api/v1/admin/users')
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ email: 'no-partner@test.tn', password: 'password1', role: 'partner' });
+  assert.equal(partnerRole.status, 422);
+  assert.equal(partnerRole.body.code, 'role_not_allowed');
+
+  const duplicate = await request(app)
+    .post('/api/v1/admin/users')
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ email: 'new-customer@test.tn', password: 'password1', role: 'agent' });
+  assert.equal(duplicate.status, 409);
+
+  const disabled = await request(app)
+    .patch(`/api/v1/admin/users/${created.body.data.id}`)
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ status: 'disabled' });
+  assert.equal(disabled.status, 200);
+  assert.equal(disabled.body.data.status, 'disabled');
+
+  const selfDisable = await request(app)
+    .patch(`/api/v1/admin/users/${admin._id}`)
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ status: 'disabled' });
+  assert.equal(selfDisable.status, 409);
+  assert.equal(selfDisable.body.code, 'cannot_disable_self');
+
+  const others = await User.find({ role: 'admin', status: 'active', _id: { $ne: admin._id } });
+  await User.updateMany({ _id: { $in: others.map((item) => item._id) } }, { status: 'disabled' });
+  try {
+    const lastAdmin = await request(app)
+      .patch(`/api/v1/admin/users/${admin._id}`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ role: 'agent' });
+    assert.equal(lastAdmin.status, 409);
+    assert.equal(lastAdmin.body.code, 'last_admin');
+  } finally {
+    await User.updateMany({ _id: { $in: others.map((item) => item._id) } }, { status: 'active' });
+  }
+});
+
+test('a published treatment is visible on the public soins list', async () => {
+  const admin = await User.create({ email: 'care-admin@test.tn', passwordHash: 'x', role: 'admin' });
+  const agent = await User.create({ email: 'care-agent@test.tn', passwordHash: 'x', role: 'agent' });
+  const denied = await request(app)
+    .post('/api/v1/admin/treatments')
+    .set('Authorization', `Bearer ${tokenFor(agent)}`)
+    .send({
+      slug: 'bain-individuel',
+      category: 'baths',
+      duration: '45 min',
+      translations: { fr: { name: 'Bain individuel' } },
+    });
+  assert.equal(denied.status, 403);
+  const created = await request(app)
+    .post('/api/v1/admin/treatments')
+    .set('Authorization', `Bearer ${tokenFor(admin)}`)
+    .send({
+      slug: 'bain-individuel',
+      category: 'baths',
+      duration: '45 min',
+      publicPrice: 45000,
+      featured: true,
+      translations: {
+        fr: {
+          name: 'Bain individuel',
+          summary: 'Un bain à la source.',
+          benefits: 'Détente\nChaleur',
+        },
+      },
+    });
+  assert.equal(created.status, 201);
+  const hidden = await request(app).get('/api/v1/treatments').set('Accept-Language', 'fr');
+  assert.equal(hidden.body.data.some((item) => item.slug === 'bain-individuel'), false);
+  const published = await request(app)
+    .post(`/api/v1/admin/treatments/${created.body.data._id}/publish`)
+    .set('Authorization', `Bearer ${tokenFor(admin)}`);
+  assert.equal(published.status, 200);
+  const listed = await request(app).get('/api/v1/treatments').set('Accept-Language', 'fr');
+  const row = listed.body.data.find((item) => item.slug === 'bain-individuel');
+  assert.equal(row.name, 'Bain individuel');
+  assert.deepEqual(row.benefitLines, ['Détente', 'Chaleur']);
+  assert.equal(row.publicPrice, 45000);
+});
