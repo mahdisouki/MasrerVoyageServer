@@ -376,7 +376,7 @@ async function cancelOrder({ orderId, actor, reason, refundAmount, idempotencyKe
       const order = await Order.findById(orderId).session(session);
       if (!order) throw new AppError(404, 'not_found', 'Not found');
       if (['cancelled', 'refunded', 'expired', 'failed'].includes(order.status)) {
-        throw new AppError(409, 'validation_error', 'Order cannot be cancelled');
+        throw new AppError(409, 'order_not_cancellable', 'This order cannot be cancelled');
       }
       const used = await IssuedVoucher.countDocuments({ orderId, status: 'used' }).session(session);
       if (used) throw new AppError(409, 'already_used', 'A voucher on this order is already used');

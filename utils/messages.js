@@ -13,6 +13,11 @@ const MESSAGES = {
     en: 'Quantity is below sales already committed on a day of the month',
   },
   order_expired: { fr: 'La réservation a expiré', ar: 'انتهت صلاحية الحجز', en: 'The reservation has expired' },
+  order_not_cancellable: {
+    fr: 'Cette commande ne peut pas être annulée (déjà annulée, remboursée, expirée ou échouée)',
+    ar: 'لا يمكن إلغاء هذا الطلب',
+    en: 'This order cannot be cancelled',
+  },
   idempotency_conflict: { fr: 'Clé d’idempotence réutilisée', ar: 'أعيد استخدام مفتاح التكرار', en: 'Idempotency-Key reused with a different request' },
   request_in_progress: { fr: 'Requête en cours', ar: 'الطلب قيد المعالجة', en: 'Request is still being processed' },
   partner_not_approved: { fr: 'Compte partenaire non validé', ar: 'حساب الشريك غير معتمد', en: 'Partner account is not approved' },
