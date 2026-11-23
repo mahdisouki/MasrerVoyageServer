@@ -41,7 +41,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev \
   && npm cache clean --force \
-  && mkdir -p /data/storage \
+  && mkdir -p /data/storage /opt/puppeteer \
   && chown -R node:node /app /data/storage /opt/puppeteer
 
 COPY --chown=node:node . .
