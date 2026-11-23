@@ -33,7 +33,7 @@ function tokenFor(user, amr = 'pwd') {
   return jwt.sign(
     { userId: user._id.toString(), role: user.role, amr, purpose: 'access' },
     process.env.JWT_SECRET,
-    { expiresIn: '15m' },
+    { expiresIn: '7d' },
   );
 }
 
