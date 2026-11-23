@@ -211,10 +211,20 @@ const getStats = asyncHandler(async (req, res) => {
 });
 const auditLog = asyncHandler(async (req, res) => {
   const { page, limit, skip } = parsePage(req.query);
-  const [data, total] = await Promise.all([
-    ActivityLog.find().sort({ at: -1 }).skip(skip).limit(limit),
+  const [rows, total] = await Promise.all([
+    ActivityLog.find().sort({ at: -1 }).skip(skip).limit(limit).populate('userId', 'email firstName lastName'),
     ActivityLog.countDocuments(),
   ]);
+  const data = rows.map((row) => {
+    const json = row.toJSON();
+    const user = row.userId && typeof row.userId === 'object' ? row.userId : null;
+    return {
+      ...json,
+      userId: user?._id || row.userId || null,
+      userEmail: user?.email || null,
+      userName: user ? [user.firstName, user.lastName].filter(Boolean).join(' ') || null : null,
+    };
+  });
   res.json({ success: true, data, page, limit, total });
 });
 const notifications = asyncHandler(async (req, res) => {
